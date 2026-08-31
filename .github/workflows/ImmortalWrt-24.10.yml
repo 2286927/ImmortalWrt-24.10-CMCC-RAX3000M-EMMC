@@ -122,7 +122,7 @@ jobs:
 
       - name: 获取上次源仓库检查哈希缓存
         id: cache-sha
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: last_checked_sha.txt
           key: ${{ env.REPO_PATH }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_MODEL }}-last-checked-sha
@@ -242,13 +242,13 @@ jobs:
         run: echo "REPO_PATH=$(echo $REPO_URL | sed -E 's#https://github.com/##;s#/$##')" >> $GITHUB_ENV
 
       - name: 获取上次本仓库哈希缓存
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: last_build_sha.txt
           key: ${{ env.REPO_PATH }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_MODEL }}-last-build-sha
 
       - name: 获取上次源仓库哈希缓存
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: last_checked_sha.txt
           key: ${{ env.REPO_PATH }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_MODEL }}-last-checked-sha
@@ -343,7 +343,7 @@ jobs:
           ln -sf "${{ github.workspace }}/workdir/openwrt" "${{ github.workspace }}/openwrt"
 
       - name: 恢复 ccache 缓存
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/ccache
           key: ${{ env.REPO_PATH }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_MODEL }}-ccache
@@ -564,7 +564,7 @@ jobs:
           make download -j$(nproc)
 
       - name: 获取磁盘增长缓存
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: openwrt/disk-growth.txt
           key: ${{ env.REPO_PATH }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_MODEL }}-disk-growth
@@ -958,26 +958,26 @@ jobs:
           done
 
       - name: 保存本仓库哈希缓存
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: last_build_sha.txt
           key: ${{ env.REPO_PATH }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_MODEL }}-last-build-sha
 
       - name: 保存源仓库哈希缓存
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: last_checked_sha.txt
           key: ${{ env.REPO_PATH }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_MODEL }}-last-checked-sha
 
       - name: 保存磁盘增长缓存
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: openwrt/disk-growth.txt
           key: ${{ env.REPO_PATH }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_MODEL }}-disk-growth
 
       - name: 保存 ccache 缓存
         if: steps.compile.outputs.status == 'success'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/ccache
           key: ${{ env.REPO_PATH }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_MODEL }}-ccache
