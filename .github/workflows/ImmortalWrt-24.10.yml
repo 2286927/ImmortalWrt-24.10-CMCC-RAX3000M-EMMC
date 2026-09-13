@@ -55,7 +55,7 @@ on:
         description: '集成 Docker'
         type: boolean
         required: true
-        default: true
+        default: false
       ssh:
         description: 'SSH connection to Actions'
         type: boolean
@@ -78,7 +78,7 @@ on:
       #   default: true
 
   schedule:
-    - cron: '0 6 * * 1'
+    - cron: '0 6 * * 1,4'
 
 permissions:
   contents: write
@@ -101,21 +101,21 @@ env:
   BUILD_COMMIT_MSGS_FILE: ''
   CHECKED_COMMIT_MSGS_FILE: ''
   ENABLE_KEEPALIVED: ${{ github.event.inputs.enable_keepalived || 'true' }}
-  ENABLE_DOCKER: ${{ github.event.inputs.enable_docker || 'true' }}
+  ENABLE_DOCKER: ${{ github.event.inputs.enable_docker || 'false' }}
   ENABLE_OPENCLASH: ${{ github.event.inputs.enable_openclash || 'true' }}
   ENABLE_WECHATPUSH: ${{ github.event.inputs.enable_wechatpush || 'false' }}
   UPLOAD_ALL_FILES: ${{ github.event.inputs.upload_all_files || 'false' }}
 
 jobs:
   check-source-updates:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     name: 检测源码更新
     outputs:
       should_build: ${{ steps.check.outputs.should_build }}
       latest_commit_message: ${{ steps.check.outputs.LATEST_COMMIT_MESSAGE }}
     steps:
       - name: 检出本仓库代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 设置 REPO_PATH
         run: echo "REPO_PATH=$(echo $REPO_URL | sed -E 's#https://github.com/##;s#/$##')" >> $GITHUB_ENV
@@ -181,7 +181,7 @@ jobs:
   build:
     needs: check-source-updates
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || needs.check-source-updates.outputs.should_build == 'true'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     name: 编译 ${{ github.event.inputs.device_model || 'cmcc_rax3000m' }}
     steps:
       - name: 调试信息
@@ -207,7 +207,7 @@ jobs:
           root-reserve-mb: 512
 
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -342,11 +342,24 @@ jobs:
 
           ln -sf "${{ github.workspace }}/workdir/openwrt" "${{ github.workspace }}/openwrt"
 
+      - name: 计算下载缓存键
+        run: echo "DL_CACHE_KEY=dl-${{ env.REPO_BRANCH }}-$(date +%Y%m)" >> $GITHUB_ENV
+
+      - name: 恢复 dl 源码包缓存
+        uses: actions/cache@v5
+        with:
+          path: openwrt/dl
+          key: ${{ env.DL_CACHE_KEY }}
+          restore-keys: |
+            dl-${{ env.REPO_BRANCH }}-
+
       - name: 恢复 ccache 缓存
         uses: actions/cache@v5
         with:
           path: ~/.cache/ccache
-          key: ${{ env.REPO_PATH }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_MODEL }}-ccache
+          key: ${{ env.REPO_PATH }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_MODEL }}-ccache-${{ github.run_id }}
+          restore-keys: |
+            ${{ env.REPO_PATH }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_MODEL }}-ccache-
 
       - name: 验证 ccache 缓存
         run: |
@@ -509,39 +522,17 @@ jobs:
         run: |
           cd "$GITHUB_WORKSPACE/openwrt"
 
-          echo "=== 清理之前可能出错的 ccache 配置 ==="
-          # 删除从 '# Enable ccache' 到文件结束的所有行（防重复/出错）
-          sed -i '/# Enable ccache for all builds/,$d' include/toplevel.mk
+          echo "=== 启用原生 ccache 支持（CONFIG_CCACHE） ==="
+          # 清理配置中可能残留的 ccache 项，统一由本步骤写入
+          sed -i '/^CONFIG_CCACHE=/d;/^CONFIG_CCACHE_DIR=/d' .config
+          { echo 'CONFIG_CCACHE=y'; echo 'CONFIG_CCACHE_DIR="/home/runner/.cache/ccache"'; } >> .config
 
-          echo "=== 追加 ccache 配置 ==="
-          cat >> include/toplevel.mk << 'EOF'
+          # 提升 ccache 容量上限（默认 5G，降低工具链与软件包对象互相淘汰的概率）
+          mkdir -p ~/.config/ccache
+          echo "max_size = 6G" > ~/.config/ccache/ccache.conf
 
-          # Enable ccache for host/toolchain only
-          export CCACHE_DIR=$(TOPDIR)/.ccache
-          export CCACHE_BASEDIR=$(TOPDIR)
-          export CCACHE_COMPRESS=1
-          export CCACHE_SLOPPINESS=time_macros
-
-          # 禁止 ccache 参与 kernel 编译（关键）
-          export CCACHE_NOHASHDIR=1
-          export CCACHE_NODIRECT=1
-          export CCACHE_DISABLE=1
-
-          # 仅在 host/toolchain 阶段启用 ccache
-          ifneq ($(findstring host,$(MAKECMDGOALS)),)
-            export CCACHE_DISABLE=0
-          endif
-          ifneq ($(findstring toolchain,$(MAKECMDGOALS)),)
-            export CCACHE_DISABLE=0
-          endif
-          EOF
-
-          # 顺便再显示最后 15 行确认
-          echo "=== toplevel.mk 最后 15 行 ==="
-          tail -n 15 include/toplevel.mk
-
-          # 强制把文件转成 unix 格式 + 去掉可能的尾随空格
-          sed -i 's/[ \t]*$//' include/toplevel.mk
+          echo "=== 当前 ccache 配置 ==="
+          grep -n "CONFIG_CCACHE" .config || echo "❌ ccache 配置写入失败"
 
       - name: 添加 keepalived-ha 插件
         if: env.ENABLE_KEEPALIVED == 'true'
@@ -577,9 +568,6 @@ jobs:
           # 创建日志文件
           : > build.log
 
-          # 使用ccache
-          export USE_CCACHE=1
-          export CCACHE_DIR="$CCACHE_DIR"
 
           # -------------------------
           # 磁盘增长缓存
@@ -709,7 +697,7 @@ jobs:
 
       - name: 上传编译日志
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: compile-log-${{ env.DEVICE_MODEL }}
           path: |
@@ -781,10 +769,10 @@ jobs:
             exit 1
           fi
 
-          # 重命名固件
-          for file in *sysupgrade* *factory*; do
+          # 重命名固件（sysupgrade / factory / initramfs-recovery）
+          for file in *sysupgrade* *factory* *initramfs*; do
             if [ -f "$file" ] && ! echo "$file" | grep -q -- "-bl2"; then
-              TYPE=$(echo "$file" | grep -o "sysupgrade\|factory")
+              TYPE=$(echo "$file" | grep -o "sysupgrade\|factory\|initramfs-recovery\|initramfs")
               EXT="${file##*.}"
               NEW_NAME="${DEVICE_MODEL}_${FIRMWARE_VERSION}${FILE_DATE}_${TYPE}.${EXT}"
               echo "🔧 重命名：$file → $NEW_NAME"
@@ -797,14 +785,14 @@ jobs:
           echo "🎉 固件整理完成"
 
       - name: 上传 bin
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         if: steps.compile.outputs.status == 'success' && github.event_name == 'workflow_dispatch' && env.UPLOAD_BIN_DIR == 'true'
         with:
           name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
           path: openwrt/bin
 
       - name: 上传 packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         if: steps.compile.outputs.status == 'success' && github.event_name == 'workflow_dispatch' && env.UPLOAD_PACKAGES_DIR == 'true'
         with:
           name: OpenWrt_packages${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
@@ -888,7 +876,7 @@ jobs:
           echo "RELEASE_TAG env: $RELEASE_TAG"
 
       - name: 发布固件
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         if: steps.tag.outputs.status == 'success'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -896,7 +884,7 @@ jobs:
           tag_name: ${{ steps.tag.outputs.RELEASE_TAG }}
           body_path: release
           files: |
-            ${{ env.UPLOAD_ALL_FILES == 'true' && format('{0}/*', env.FIRMWARE) || format('{0}/*sysupgrade*.*', env.FIRMWARE) }}
+            ${{ env.UPLOAD_ALL_FILES == 'true' && format('{0}/*', env.FIRMWARE) || format('{0}/*{{sysupgrade,initramfs}}*.*', env.FIRMWARE) }}
 
       - name: 验证Release创建
         run: |
