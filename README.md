@@ -10,7 +10,7 @@
 ## 功能
 - **支持的设备**：`cmcc_rax3000m-emmc`
 - **自动编译**：每周一检查源仓库更新，若有新提交，自动为 CMCC RAX3000M EMMC 机型编译固件。
-- **固件上传**：上传 `sysupgrade.itb` 文件到 GitHub Release。
+- **固件上传**：上传 `sysupgrade.itb`（日常升级）与 `initramfs-recovery.itb`（U-Boot 救砖）到 GitHub Release；勾选"上传所有文件"时额外上传 GPT、preloader、FIP 等底层文件。
 - **清理机制**：保留最近 30 个 GitHub Release 和 30 次工作流运行，自动删除旧记录以节省空间。
 
 ## 使用方法
@@ -63,3 +63,56 @@
 - padavanonly仓库分支：[openwrt-24.10-6.6](https://github.com/padavanonly/immortalwrt-mt798x-6.6/tree/openwrt-24.10-6.6)
 ### 工作流
 - 参考工作流：[ImWRT-798X](https://github.com/hhCodingCat/ImWRT-798X)
+
+---
+
+# v2.0 优化说明（2026-09）
+
+## 1. 新增 ImmortalWrt 25.12 支持
+- 新增工作流 `ImmortalWrt-25.12.yml`：基于 ImmortalWrt 官方 `openwrt-25.12` 分支（最新稳定版 25.12.x，内核 6.12）。
+- 新增 `config/25.12.config`：由 24.10 配置迁移，已在 25.12 真实源码树中完成 `make defconfig` 干跑验证（420 个启用包全部解析成功、零符号丢失）。
+- 25.12 的自动适配已处理：包管理器由 opkg 迁移为 apk（opkg 保留）、`CONFIG_LINUX_6_12`、`acme` → `acme-acmesh`（官方重构更名）、移除已被官方替代的 turboacc 等。
+- 24.10 与 25.12 双版本并存，可按需选用；上游 ImmortalWrt 24.10 分支已停止安全更新，建议优先使用 25.12。
+
+## 2. 第三方软件包官方去重（官方优先）
+- 原方案在 `diy-part1.sh` 中以白名单整包复制第三方源码（kenzok8/small-package），其中 **85 个包与官方源码树/feeds 重复**（如 sing-box、hysteria、mosdns、tailscale、frp、vlmcsd、ttyd、nmap、luci-app-passwall、luci-app-openclash、luci-app-homeproxy 等），且旧版散落在脚本中的固定清单会随时间漂移。
+- 现统一改为 `diy-part2.sh` 调用 `scripts/common/package-sync.sh`：
+  - 以 153 个真实第三方包白名单为准（16 个功能分类），全部来自 kenzok8/small-package；
+  - 逐包对照 **源码树 package/ + 全部官方 feeds**，官方已有的一律跳过、使用官方版本（运行时判定，官方未来新增同名包会自动切换到官方版本）；
+  - 剔除了 88 个在上游和官方 feeds 中均已消失的彻底失效包（如 luci-app-wireguard、luci-app-kucat、turboacc 旧版等）；
+  - 修复了原脚本顶层目录判断的隐藏 bug：small-package 中嵌套目录内的包（如 `other/lean/luci-app-turboacc`）此前从未被复制成功，现支持递归查找。
+- 白名单更新方式：直接编辑 `scripts/common/package-sync.sh` 中的 `WHITELIST` 段落（每行一个包名，`#` 开头为分类注释）。
+
+## 3. 编译链路修复与优化
+- **修复 `scripts/24.10/diy-part1.sh` 截断问题**：原文件仅存前 267 行（约 405 行处戛然而止）；v2.0 中第三方导入与去重逻辑移至 diy-part2（需要官方 feeds 目录做对照），diy-part1 保留为占位脚本，截断不再有影响。
+- **ccache 改为官方原生支持**：原 workflow 向 `include/toplevel.mk` 追加的 hack 因 `MAKECMDGOALS` 判空实际永远 `CCACHE_DISABLE=1`（无效缓存）；且编译步骤的 `export USE_CCACHE=1` 并非 OpenWrt 认可的开关。现改为写入 `CONFIG_CCACHE=y` + `CONFIG_CCACHE_DIR`（与 actions/cache 的 `~/.cache/ccache` 路径一致），缓存真实生效。
+- **Runner 升级**：两个 workflow 均由 `ubuntu-22.04` 升级为 `ubuntu-24.04`（22.04 镜像已被 GitHub 淘汰，旧配置存在无法调度的风险）。
+- 定时检查为每周一/周四（06:00 / 06:30 UTC 错峰），只在源码有更新时才编译，同时保活 GitHub 缓存（闲置 7 天会被淘汰）。
+- **编译提速（不改动任何编译配置）**：`openwrt/dl` 源码包缓存（按月滚动，每次省 10-20 分钟下载）+ ccache 滚动缓存（修复原静态 key 导致缓存首建后永不更新的问题，容量上限提升至 6G）。
+- Actions 全部组件升级至 Node 24 运行时（checkout@v5 / upload-artifact@v5 / gh-release@v3 / cache@v5），消除 Node.js 20 弃用警告。
+- **Docker 改为按需集成**：`enable_docker` 默认关闭——dockerd/docker-compose/containerd/runc 均为 Go 编译大户（合计约 25-35 分钟，且 ccache 对 Go 交叉编译无效），RAX3000M 仅 512MB 内存运行 Docker 也本就吃力；需要时在 Run workflow 勾选「集成 Docker」即可，`config/docker.config` 保留、随时可用。
+
+## 4. 使用说明
+- 编译 25.12：Actions 页面选择 `ImmortalWrt-25.12` 工作流 → Run workflow（默认 `openwrt-25.12` 分支 + `25.12.config`）。
+- 编译 24.10：选择 `ImmortalWrt-24.10` 工作流，用法不变。
+- 两个版本的 diy 脚本均位于 `scripts/<版本>/`，公共去重脚本位于 `scripts/common/package-sync.sh`。
+- 手动触发时请保持默认的 `repo_branch` / `config_file` 选择，避免跨版本混用配置。
+
+## 值守式固件升级（GitHub Releases 固定 URL，无需 ASU 服务器）
+
+每次编译发布 Release 时会额外上传一组固定资产（文件名恒定，URL 永远指向最新构建）：
+
+- `autoupdate-RAX3000M-24.10-version.txt`：构建指纹（RUN_ID）
+- `autoupdate-RAX3000M-24.10-sysupgrade.itb`：最新 sysupgrade 镜像
+- `autoupdate-RAX3000M-24.10-sysupgrade.itb.sha256`：镜像 sha256
+
+固件内置 `rax-autoupdate` 脚本，cron 每日自动检查一次（默认只提醒不自动刷）：
+
+    rax-autoupdate status     # 查看状态
+    rax-autoupdate check      # 手动检查更新
+    rax-autoupdate apply      # 下载 + sha256 校验 + 刷写（保留配置，自动重启）
+    rax-autoupdate disable    # 停用每日自动检查
+
+- 升级地址基于本仓库 `releases/latest/download/<固定文件名>`，fork 后无需改配置自动适配
+- 新版本提醒写入系统日志；如需推送，配置 /etc/config/autoupdate 的 notify_url（ntfy/Bark 等 POST 文本接口）
+- 全自动无人值守刷写默认关闭；确认风险后可置 auto_apply '1'
