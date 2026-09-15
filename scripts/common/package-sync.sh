@@ -104,6 +104,8 @@ luci-app-netwizard
 # ---------- DNS 相关 ----------
 dns2socks-rust luci-app-dnsfilter luci-app-dnscrypt-proxy2 luci-app-dnsmasq-ipset
 luci-app-dnsproxy
+# ---------- DDNS-GO（动态域名，含 luci 界面） ----------
+ddns-go luci-app-ddns-go
 # ---------- 内网穿透/组网/远程 ----------
 easytier luci-app-easytier ddnsto luci-app-ddnsto
 headscale lucky luci-app-lucky linkease
